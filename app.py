@@ -3,7 +3,6 @@
 # ==========================================
 import streamlit as st 
 import pandas as pd 
-import os 
 
 # ==========================================
 # CONFIGURAÇÃO INICIAL DA PÁGINA
@@ -44,15 +43,22 @@ df_despesas = pd.DataFrame()
 df_receita = pd.DataFrame()
 
 # ==========================================
-# LEITURA E PROCESSAMENTO DAS DESPESAS
+# LEITURA DOS DADOS (AGORA DIRETO DO GOOGLE SHEETS)
 # ==========================================
-if os.path.exists("BaseControle_2026_Base.csv"):
-    df_base = pd.read_csv("BaseControle_2026_Base.csv")
+try:
+    # A MÁGICA: O Python busca os links diretamente do Cofre do Streamlit!
+    # Se você for testar localmente no VS Code, precisaremos criar um arquivo ".streamlit/secrets.toml",
+    # mas para a internet, ele já vai puxar direto da configuração que fizemos.
+    url_base = st.secrets["URL_BASE"]
+    url_receita = st.secrets["URL_RECEITA"]
+
+    # ==========================================
+    # PROCESSAMENTO DAS DESPESAS
+    # ==========================================
+    df_base = pd.read_csv(url_base)
     df_base.columns = df_base.columns.str.strip() 
     
     df_base['Valor Numérico'] = limpar_valor(df_base['Valor'])
-    
-    # BASE: Padrão Brasileiro (Dia primeiro). Usamos format='mixed' para robustez extra.
     df_base['Data'] = pd.to_datetime(df_base['Data'], format='mixed', dayfirst=True, errors='coerce')
     
     df_base['Data Competência'] = df_base.apply(definir_competencia, axis=1)
@@ -60,30 +66,24 @@ if os.path.exists("BaseControle_2026_Base.csv"):
     df_base['Mês'] = df_base['Data Competência'].dt.month
     
     df_despesas = df_base[df_base['Tipo'] == 'Despesa'].dropna(subset=['Ano', 'Mês'])
-else:
-    st.error("❌ Ficheiro 'BaseControle_2026_Base.csv' não encontrado!")
 
-# ==========================================
-# LEITURA E PROCESSAMENTO DAS RECEITAS
-# ==========================================
-if os.path.exists("BaseControle_2026_Receita.csv"):
-    try:
-        df_rec_raw = pd.read_csv("BaseControle_2026_Receita.csv")
-        df_rec_raw.columns = df_rec_raw.columns.str.strip() 
-        
-        df_rec_raw['Valor Numérico'] = limpar_valor(df_rec_raw['Valor'])
-        
-        # RECEITA: Padrão Americano (Mês primeiro). dayfirst=False resolve o conflito!
-        df_rec_raw['Data'] = pd.to_datetime(df_rec_raw['Data'], format='mixed', dayfirst=False, errors='coerce')
-        
-        df_rec_raw['Ano'] = df_rec_raw['Data'].dt.year
-        df_rec_raw['Mês'] = df_rec_raw['Data'].dt.month
-        
-        df_receita = df_rec_raw.dropna(subset=['Ano', 'Mês'])
-    except Exception as e:
-        st.warning(f"⚠️ Ocorreu um erro ao processar as colunas de Receitas: {e}")
-else:
-    st.warning("⚠️ Ficheiro 'BaseControle_2026_Receita.csv' não encontrado. A mostrar apenas as Despesas.")
+    # ==========================================
+    # PROCESSAMENTO DAS RECEITAS
+    # ==========================================
+    df_rec_raw = pd.read_csv(url_receita)
+    df_rec_raw.columns = df_rec_raw.columns.str.strip() 
+    
+    df_rec_raw['Valor Numérico'] = limpar_valor(df_rec_raw['Valor'])
+    df_rec_raw['Data'] = pd.to_datetime(df_rec_raw['Data'], format='mixed', dayfirst=False, errors='coerce')
+    
+    df_rec_raw['Ano'] = df_rec_raw['Data'].dt.year
+    df_rec_raw['Mês'] = df_rec_raw['Data'].dt.month
+    
+    df_receita = df_rec_raw.dropna(subset=['Ano', 'Mês'])
+
+except Exception as e:
+    # Se houver erro de leitura ou o cofre não estiver configurado, ele avisa.
+    st.error(f"Erro ao conectar com o Google Sheets: {e}")
 
 # ==========================================
 # MENU LATERAL PARA FILTROS
