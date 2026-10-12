@@ -3,6 +3,7 @@
 # ==========================================
 import streamlit as st 
 import pandas as pd 
+import plotly.express as px # NOVO: Biblioteca para gráficos interativos avançados
 
 # ==========================================
 # CONFIGURAÇÃO INICIAL DA PÁGINA
@@ -28,8 +29,11 @@ meses_pt = {
 }
 
 def definir_competencia(linha):
-    if 'Pagamento' in linha and linha['Pagamento'] == 'Crédito' and pd.notna(linha.get('Fatura Mês')):
-        texto = str(linha['Fatura Mês']).strip()
+    pagamento = linha.get('Pagamento', '')
+    fatura = linha.get('Fatura Mês')
+    
+    if pagamento in ['Crédito', 'Pendente'] and pd.notna(fatura):
+        texto = str(fatura).strip()
         partes = texto.split() 
         if len(partes) >= 2:
             nome_mes = partes[0].capitalize()
@@ -37,52 +41,39 @@ def definir_competencia(linha):
             ano_str = partes[1]
             ano_num = 2000 + int(ano_str) if len(ano_str) == 2 else int(ano_str)
             return pd.to_datetime(f"{ano_num}-{mes_num:02d}-01")
+            
     return linha.get('Data')
 
 df_despesas = pd.DataFrame()
 df_receita = pd.DataFrame()
 
 # ==========================================
-# LEITURA DOS DADOS (AGORA DIRETO DO GOOGLE SHEETS)
+# LEITURA DOS DADOS (GOOGLE SHEETS)
 # ==========================================
 try:
-    # A MÁGICA: O Python busca os links diretamente do Cofre do Streamlit!
-    # Se você for testar localmente no VS Code, precisaremos criar um arquivo ".streamlit/secrets.toml",
-    # mas para a internet, ele já vai puxar direto da configuração que fizemos.
     url_base = st.secrets["URL_BASE"]
     url_receita = st.secrets["URL_RECEITA"]
 
-    # ==========================================
-    # PROCESSAMENTO DAS DESPESAS
-    # ==========================================
+    # Despesas
     df_base = pd.read_csv(url_base)
     df_base.columns = df_base.columns.str.strip() 
-    
     df_base['Valor Numérico'] = limpar_valor(df_base['Valor'])
     df_base['Data'] = pd.to_datetime(df_base['Data'], format='mixed', dayfirst=True, errors='coerce')
-    
     df_base['Data Competência'] = df_base.apply(definir_competencia, axis=1)
     df_base['Ano'] = df_base['Data Competência'].dt.year
     df_base['Mês'] = df_base['Data Competência'].dt.month
-    
     df_despesas = df_base[df_base['Tipo'] == 'Despesa'].dropna(subset=['Ano', 'Mês'])
 
-    # ==========================================
-    # PROCESSAMENTO DAS RECEITAS
-    # ==========================================
+    # Receitas
     df_rec_raw = pd.read_csv(url_receita)
     df_rec_raw.columns = df_rec_raw.columns.str.strip() 
-    
     df_rec_raw['Valor Numérico'] = limpar_valor(df_rec_raw['Valor'])
-    df_rec_raw['Data'] = pd.to_datetime(df_rec_raw['Data'], format='mixed', dayfirst=False, errors='coerce')
-    
+    df_rec_raw['Data'] = pd.to_datetime(df_rec_raw['Data'], format='mixed', dayfirst=True, errors='coerce')
     df_rec_raw['Ano'] = df_rec_raw['Data'].dt.year
     df_rec_raw['Mês'] = df_rec_raw['Data'].dt.month
-    
     df_receita = df_rec_raw.dropna(subset=['Ano', 'Mês'])
 
 except Exception as e:
-    # Se houver erro de leitura ou o cofre não estiver configurado, ele avisa.
     st.error(f"Erro ao conectar com o Google Sheets: {e}")
 
 # ==========================================
@@ -132,24 +123,49 @@ col_saldo.metric(label="Saldo Líquido", value=fmt(saldo_liquido), delta=fmt(sal
 st.divider() 
 
 if not df_despesas.empty:
+    # --- BLOCO CARTÕES DE PAGAMENTO ---
     st.write("### 💳 Gastos por Forma de Pagamento")
     gastos_por_pagamento = df_despesas.groupby('Pagamento')['Valor Numérico'].sum().reset_index()
-    
     colunas_cartoes = st.columns(len(gastos_por_pagamento))
     for indice, linha in gastos_por_pagamento.iterrows():
         colunas_cartoes[indice].metric(label=str(linha['Pagamento']), value=fmt(linha['Valor Numérico']))
-        
     st.divider()
 
-    st.write("### 🛒 Gastos por Categoria")
+    # ---------------------------------------------------------
+    # NOVO: GRÁFICO DE EVOLUÇÃO NO TEMPO (LINHA)
+    # ---------------------------------------------------------
+    st.write("### 📈 Evolução dos Gastos")
+    # Agrupamos os gastos por data (dia) para ver a linha do tempo
+    evolucao = df_despesas.groupby(df_despesas['Data'].dt.date)['Valor Numérico'].sum().reset_index()
+    evolucao.columns = ['Data', 'Total (R$)']
+    
+    # Desenhamos o gráfico de linha usando o Plotly
+    fig_linha = px.line(evolucao, x='Data', y='Total (R$)', markers=True)
+    fig_linha.update_layout(xaxis_title="Data da Compra", yaxis_title="Valor Gasto (R$)")
+    st.plotly_chart(fig_linha, use_container_width=True)
+    
+    st.divider()
+
+    # ---------------------------------------------------------
+    # NOVO: GRÁFICO DE ROSCA PARA CATEGORIAS
+    # ---------------------------------------------------------
+    st.write("### 🛒 Distribuição por Categoria")
     gastos_categoria = df_despesas.groupby('Categoria')['Valor Numérico'].sum().sort_values(ascending=False)
+    tabela_bonita = gastos_categoria.reset_index().rename(columns={'Valor Numérico': 'Total (R$)'})
     
     col_grafico, col_tabela = st.columns([2, 1])
+    
     with col_grafico:
-        st.bar_chart(gastos_categoria)
+        # Desenhamos o gráfico de rosca (pie chart com buraco no meio)
+        fig_rosca = px.pie(tabela_bonita, values='Total (R$)', names='Categoria', hole=0.4)
+        # Colocamos o texto interativo e escondemos a legenda lateral para ficar mais moderno
+        fig_rosca.update_traces(textposition='inside', textinfo='percent+label')
+        fig_rosca.update_layout(showlegend=False)
+        st.plotly_chart(fig_rosca, use_container_width=True)
+        
     with col_tabela:
-        tabela_bonita = gastos_categoria.reset_index().rename(columns={'Valor Numérico': 'Total (R$)'})
         st.dataframe(tabela_bonita, hide_index=True)
+
 else:
     st.info("Nenhuma despesa para mostrar neste período.")
 
